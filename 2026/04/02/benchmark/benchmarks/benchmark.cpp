@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <iostream>
 #include <print>
@@ -474,6 +475,53 @@ void collect_benchmark_results(size_t input_size, size_t number_strings) {
     counter_neon_intrinsics_claude += c;
   };
 
+  volatile uint64_t counter_gcc_vec = 0;
+  auto count_gcc_vector_ext = [&strings, &counter_gcc_vec]() {
+    typedef uint8_t v16u8 __attribute__((vector_size(16)));
+    const v16u8 splat = {
+      '!','!','!','!','!','!','!','!',
+      '!','!','!','!','!','!','!','!'
+    };
+    size_t c = 0;
+    for (const auto &str : strings) {
+      const uint8_t* ptr = reinterpret_cast<const uint8_t*>(str.data());
+      size_t len = str.size();
+      v16u8 acc0 = {}, acc1 = {}, acc2 = {}, acc3 = {};
+      while (len >= 64) {
+        v16u8 v0, v1, v2, v3;
+        memcpy(&v0, ptr, 16);
+        memcpy(&v1, ptr + 16, 16);
+        memcpy(&v2, ptr + 32, 16);
+        memcpy(&v3, ptr + 48, 16);
+        acc0 -= (v16u8)(v0 == splat);
+        acc1 -= (v16u8)(v1 == splat);
+        acc2 -= (v16u8)(v2 == splat);
+        acc3 -= (v16u8)(v3 == splat);
+        ptr += 64;
+        len -= 64;
+      }
+      while (len >= 16) {
+        v16u8 v0;
+        memcpy(&v0, ptr, 16);
+        acc0 -= (v16u8)(v0 == splat);
+        ptr += 16;
+        len -= 16;
+      }
+      acc0 += acc1;
+      acc2 += acc3;
+      acc0 += acc2;
+      uint32_t total = 0;
+      for (int i = 0; i < 16; i++) {
+        total += acc0[i];
+      }
+      for (size_t i = 0; i < len; i++) {
+        total += (ptr[i] == '!');
+      }
+      c += total;
+    }
+    counter_gcc_vec += c;
+  };
+
   pretty_print("count_classic", number_strings, counters::bench(count_classic));
   pretty_print("count_ranges", number_strings, counters::bench(count_ranges));
   pretty_print("count_assembly_claude", number_strings, counters::bench(count_assembly_claude));
@@ -483,6 +531,7 @@ void collect_benchmark_results(size_t input_size, size_t number_strings) {
   pretty_print("count_assembly_claude_3", number_strings, counters::bench(count_assembly_claude_3));
   pretty_print("count_neon_intrinsics_claude_3_grok", number_strings, counters::bench(count_neon_intrinsics_claude_3_grok));
   pretty_print("count_neon_intrinsics_claude_3_claude", number_strings, counters::bench(count_neon_intrinsics_claude_3_claude));
+  pretty_print("count_gcc_vector_ext", number_strings, counters::bench(count_gcc_vector_ext));
 
   // Validate correctness with a single run of each
   counter_classic = 0;
@@ -494,6 +543,7 @@ void collect_benchmark_results(size_t input_size, size_t number_strings) {
   counter_claude3 = 0;
   counter_neon_intrinsics = 0;
   counter_neon_intrinsics_claude = 0;
+  counter_gcc_vec = 0;
   count_classic();
   count_ranges();
   count_assembly_claude();
@@ -503,6 +553,7 @@ void collect_benchmark_results(size_t input_size, size_t number_strings) {
   count_assembly_claude_3();
   count_neon_intrinsics_claude_3_grok();
   count_neon_intrinsics_claude_3_claude();
+  count_gcc_vector_ext();
   if (counter_classic != counter_assembly_claude) {
     std::cout << "Error: counts differ (classic vs claude): " << counter_classic << " vs " << counter_assembly_claude << std::endl;
   }
@@ -526,6 +577,9 @@ void collect_benchmark_results(size_t input_size, size_t number_strings) {
   }
   if (counter_classic != counter_neon_intrinsics_claude) {
     std::cout << "Error: counts differ (classic vs neon_intrinsics_claude): " << counter_classic << " vs " << counter_neon_intrinsics_claude << std::endl;
+  }
+  if (counter_classic != counter_gcc_vec) {
+    std::cout << "Error: counts differ (classic vs gcc_vector_ext): " << counter_classic << " vs " << counter_gcc_vec << std::endl;
   }
 }
 
